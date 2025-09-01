@@ -33,7 +33,7 @@ def _acceptance_dispatch() -> Dict[str, Callable[[float, bool], float]]:
 class FeeCalculator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("司法速算器 v1.0 BY. HSLzf")
+        self.setWindowTitle("司法速算器 v1.0")
         self.resize(560, 300)
 
         self.dispatch = _acceptance_dispatch()

@@ -7,7 +7,7 @@ calc.py
 - 非财产/行政/知产等：按规则取值
 """
 
-from typing import Literal 
+from typing import Tuple, List, Literal 
 from datetime import date, timedelta
 
 
@@ -143,13 +143,39 @@ def calc_application_fee(app_type: ApplicationType, amount: float = 0.0) -> floa
 # =========================
 # 日期计算
 # =========================
-DEFAULT_DAYS = {
-    "公告开庭日": 30,
-    "上诉期间": 15,
-    "涉外判决": 60,  # 默认 15 天上诉期 + 1 天起算
-    "自定义": 0,
-}
+def is_weekend(d: date) -> bool:
+    """判断是否为周末"""
+    return d.weekday() >= 5
 
+def get_next_monday(d: date) -> date:
+    """获取下一个周一"""
+    days_ahead = 7 - d.weekday()
+    return d + timedelta(days=days_ahead)
 
-def add_days(start: date, days: int) -> date:
-    return start + timedelta(days=days)
+def calculate_court_date(notice_date: date, notice_days: int, 
+                        reply_days: int, court_day: int) -> Tuple[List[date], date]:
+    """
+    计算开庭日期和关键日期列表
+    返回: (关键日期列表, 最终开庭日期)
+    """
+    # 计算关键日期
+    notice_end = notice_date + timedelta(days=notice_days)  # 公告期结束
+    reply_end = notice_end + timedelta(days=reply_days)     # 答辩期结束
+    court_date = reply_end + timedelta(days=court_day)      # 预计开庭日
+    
+    # 如果开庭日是周末，顺延到下周一
+    if is_weekend(court_date):
+        final_court_date = get_next_monday(court_date)
+    else:
+        final_court_date = court_date
+        
+    # 返回所有关键日期和最终开庭日期
+    key_dates = [
+        notice_date,    # 公告日
+        notice_end,     # 公告期结束日
+        reply_end,      # 答辩期结束日
+        court_date,     # 原开庭日
+        final_court_date # 最终开庭日
+    ]
+    
+    return key_dates, final_court_date

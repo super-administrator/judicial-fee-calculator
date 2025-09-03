@@ -1,6 +1,6 @@
 # ui.py
 import sys
-from datetime import date
+from datetime import date, timedelta
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QLabel, QTabWidget, QComboBox, QDateEdit, QSpinBox,
@@ -169,10 +169,10 @@ class FeeCalculator(QWidget):
         notice_period_layout = QHBoxLayout()
         notice_period_label = QLabel("公告期：")
         notice_period_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        self.notice_period = QSpinBox()
-        self.notice_period.setRange(0, 365)
-        self.notice_period.setValue(30)
-        self.notice_period.setStyleSheet("QSpinBox { font-size: 14pt; }")
+        self.notice_period = QLineEdit()  # 改用 QLineEdit
+        self.notice_period.setStyleSheet("QLineEdit { font-size: 14pt; }")
+        self.notice_period.setText("30")   # 设置默认值
+        self.notice_period.setMaximumWidth(60)  # 限制输入框宽度
         notice_period_layout.addWidget(notice_period_label)
         notice_period_layout.addWidget(self.notice_period)
         
@@ -184,10 +184,10 @@ class FeeCalculator(QWidget):
         reply_period_layout = QHBoxLayout()
         reply_period_label = QLabel("答辩期：")
         reply_period_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        self.reply_period = QSpinBox()
-        self.reply_period.setRange(0, 365)
-        self.reply_period.setValue(15)
-        self.reply_period.setStyleSheet("QSpinBox { font-size: 14pt; }")
+        self.reply_period = QLineEdit()  # 改用 QLineEdit
+        self.reply_period.setStyleSheet("QLineEdit { font-size: 14pt; }")
+        self.reply_period.setText("15")   # 设置默认值
+        self.reply_period.setMaximumWidth(60)  # 限制输入框宽度
         reply_period_layout.addWidget(reply_period_label)
         reply_period_layout.addWidget(self.reply_period)
         
@@ -199,10 +199,10 @@ class FeeCalculator(QWidget):
         court_day_layout = QHBoxLayout()
         court_day_label = QLabel("开庭日第")
         court_day_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        self.court_day = QSpinBox()
-        self.court_day.setRange(1, 365)
-        self.court_day.setValue(3)
-        self.court_day.setStyleSheet("QSpinBox { font-size: 14pt; }")
+        self.court_day = QLineEdit()  # 改用 QLineEdit
+        self.court_day.setStyleSheet("QLineEdit { font-size: 14pt; }")
+        self.court_day.setText("3")    # 设置默认值
+        self.court_day.setMaximumWidth(60)  # 限制输入框宽度
         court_day_suffix = QLabel("日")
         court_day_suffix.setStyleSheet("QLabel { font-size: 14pt; }")
         court_day_layout.addWidget(court_day_label)
@@ -248,68 +248,90 @@ class FeeCalculator(QWidget):
         
         # 连接信号
         self.notice_date.dateChanged.connect(self.update_calendar)
-        self.notice_period.valueChanged.connect(self.update_calendar)
-        self.reply_period.valueChanged.connect(self.update_calendar)
-        self.court_day.valueChanged.connect(self.update_calendar)
+        self.notice_period.textChanged.connect(self.update_calendar)
+        self.reply_period.textChanged.connect(self.update_calendar)
+        self.court_day.textChanged.connect(self.update_calendar)
         
         return w
     
     def update_calendar(self):
         """更新日历显示和结果"""
-        # 清除原有格式
-        self.calendar.setDateTextFormat(QDate(), QTextCharFormat())
-        
-        # 获取输入值
-        notice_date = self.notice_date.date().toPython()
-        notice_days = self.notice_period.value()
-        reply_days = self.reply_period.value()
-        court_day = self.court_day.value()
-        
-        # 计算日期
-        key_dates, final_court_date = calc.calculate_court_date(
-            notice_date, notice_days, reply_days, court_day
-        )
-        
-        # 设置日期格式
-        weekend_format = QTextCharFormat()
-        weekend_format.setBackground(QColor(255, 255, 0))  # 黄色背景 - 周末
-        
-        normal_format = QTextCharFormat()
-        normal_format.setBackground(QColor(50, 205, 50))  # 绿色背景 - 工作日
-        
-        # 获取原始开庭日期和最终开庭日期
-        original_court_date = key_dates[-2]  # 原始计划开庭日
-        final_court_date = key_dates[-1]    # 最终开庭日
-        
-        # 标记开庭日期
-        if calc.is_weekend(original_court_date):
-            # 如果原始开庭日是周末，用黄色标记
-            original_qdate = QDate.fromString(original_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
-            self.calendar.setDateTextFormat(original_qdate, weekend_format)
+        try:
+            # 获取输入值并验证
+            notice_date = self.notice_date.date().toPython()
+            # 从第二天开始计算
+            notice_date = notice_date + timedelta(days=1)
             
-            # 同时用绿色标记顺延后的周一
-            final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
-            self.calendar.setDateTextFormat(final_qdate, normal_format)
-        else:
-            # 如果是工作日，直接用绿色标记
-            final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
-            self.calendar.setDateTextFormat(final_qdate, normal_format)
-        
-        # 自动将日历翻到开庭月份
-        final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
-        # 直接使用最终开庭日期的年月
-        self.calendar.setCurrentPage(final_qdate.year(), final_qdate.month())
-        
-        # 更新结果显示
-        if final_court_date != original_court_date:
-            self.result_label.setText(
-                f"开庭时间：原定于{original_court_date.strftime('%Y年%m月%d日')}（周末），"
-                f"顺延至{final_court_date.strftime('%Y年%m月%d日')}"
-            )
-        else:
-            self.result_label.setText(
-                f"开庭时间：{final_court_date.strftime('%Y年%m月%d日')}"
-            )
+            # 转换输入为整数，如果输入无效则使用默认值
+            try:
+                # 获取输入值，允许0值
+                notice_days = int(self.notice_period.text() or "30")
+                reply_days = int(self.reply_period.text() or "15")
+                court_day = int(self.court_day.text() or "3")
+                
+            except ValueError:
+                return
+                
+            # 修改验证范围，允许0值
+            if not (0 <= notice_days <= 365 and 0 <= reply_days <= 365 and 0 <= court_day <= 365):
+                return
+                
+            # 清除原有格式
+            self.calendar.setDateTextFormat(QDate(), QTextCharFormat())
+            
+            # 累加天数，0值不参与计算
+            current_date = notice_date
+            if notice_days > 0:
+                current_date += timedelta(days=notice_days)
+            if reply_days > 0:
+                current_date += timedelta(days=reply_days)
+            if court_day > 0:
+                current_date += timedelta(days=court_day)
+                
+            # 检查是否为周末并处理顺延
+            final_court_date = current_date
+            original_court_date = current_date
+            if calc.is_weekend(current_date):
+                final_court_date = calc.get_next_monday(current_date)
+                
+            # 设置日期格式
+            weekend_format = QTextCharFormat()
+            weekend_format.setBackground(QColor(255, 255, 0))  # 黄色背景 - 周末
+            
+            normal_format = QTextCharFormat()
+            normal_format.setBackground(QColor(50, 205, 50))  # 绿色背景 - 工作日
+            
+            # 标记开庭日期
+            if calc.is_weekend(original_court_date):
+                # 如果原始开庭日是周末，用黄色标记
+                original_qdate = QDate.fromString(original_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+                self.calendar.setDateTextFormat(original_qdate, weekend_format)
+                
+                # 同时用绿色标记顺延后的周一
+                final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+                self.calendar.setDateTextFormat(final_qdate, normal_format)
+            else:
+                # 如果是工作日，直接用绿色标记
+                final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+                self.calendar.setDateTextFormat(final_qdate, normal_format)
+            
+            # 自动将日历翻到开庭月份
+            self.calendar.setCurrentPage(final_qdate.year(), final_qdate.month())
+            
+            # 更新结果显示
+            if final_court_date != original_court_date:
+                self.result_label.setText(
+                    f"开庭时间：原定于{original_court_date.strftime('%Y年%m月%d日')}（周末），"
+                    f"顺延至{final_court_date.strftime('%Y年%m月%d日')}"
+                )
+            else:
+                self.result_label.setText(
+                    f"开庭时间：{final_court_date.strftime('%Y年%m月%d日')}"
+                )
+
+        except Exception as e:
+            print(f"日期计算错误: {e}")
+            return
 
     # -------------------------------
     # Tab 3: 利息计算（预留）

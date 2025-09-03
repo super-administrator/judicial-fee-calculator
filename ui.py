@@ -144,7 +144,7 @@ class FeeCalculator(QWidget):
         # 第一排：公告日期选择（居中显示）
         notice_date_layout = QHBoxLayout()
         notice_date_layout.addStretch(1)
-        notice_date_label = QLabel("公告日期：")
+        notice_date_label = QLabel("起始日（从第二日起计）：")
         # 设置第一行字体大小
         notice_date_label.setStyleSheet("QLabel { font-size: 14pt; }")
         

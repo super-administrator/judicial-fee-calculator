@@ -4,13 +4,15 @@ from datetime import date, timedelta
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QLabel, QTabWidget, QComboBox, QDateEdit, QSpinBox,
-    QCalendarWidget  # 添加日历控件
+    QCalendarWidget, QFrame, QButtonGroup, QRadioButton  
 )
 from PySide6.QtCore import Qt, QDate, QLocale
 from PySide6.QtGui import QTextCharFormat, QColor
 from typing import Dict, Callable, List, Tuple
 
 import calc
+from date_calc import calculate_court_date
+from interest_calc import calculate_interest, convert_to_chinese_number, calculate_days_between
 
 # 受理类型（含申请类） → 对应计算函数（返回受理费）
 def _acceptance_dispatch() -> Dict[str, Callable[[float, bool], float]]:
@@ -34,7 +36,7 @@ def _acceptance_dispatch() -> Dict[str, Callable[[float, bool], float]]:
 class FeeCalculator(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("司法速算器 v1.1 BY. HSLzf")
+        self.setWindowTitle("司法速算器 v1.2 BY. HSLzf")
         self.resize(700, 310)
 
         self.dispatch = _acceptance_dispatch()
@@ -46,8 +48,9 @@ class FeeCalculator(QWidget):
         # 各功能页
         self.tabs.addTab(self._build_fee_tab(), "诉讼费用计算")
         self.tabs.addTab(self._build_date_calc_tab(), "日期计算")
-        self.tabs.addTab(self._build_interest_tab(), "利息计算（预留）")
-
+        self.tabs.addTab(self._build_interest_tab(), "利息/违约金计算")
+        self.tabs.addTab(self._build_reserve_tab(), "预留模块")
+        
     # -------------------------------
     # Tab 1: 诉讼费用计算
     # -------------------------------
@@ -61,7 +64,9 @@ class FeeCalculator(QWidget):
         # 左侧案件类型布局
         type_layout = QHBoxLayout()
         type_label = QLabel("案件类型：")
+        type_label.setStyleSheet("QLabel { font-size: 16pt; }")
         self.combo_case_type = QComboBox()
+        self.combo_case_type.setStyleSheet("QComboBox { font-size: 16pt; }")
         self.combo_case_type.addItems(list(self.dispatch.keys()))
         type_layout.addWidget(type_label)
         type_layout.addWidget(self.combo_case_type)
@@ -69,31 +74,36 @@ class FeeCalculator(QWidget):
         # 右侧金额输入布局
         amount_layout = QHBoxLayout()
         amount_label = QLabel("案件金额：")
+        amount_label.setStyleSheet("QLabel { font-size: 16pt; }")
         self.input_amount = QLineEdit()
+        self.input_amount.setStyleSheet("QLineEdit { font-size: 16pt; }")
+        self.input_amount.setMaximumWidth(200)
+        self.fee_amount_chinese = QLabel("（中文大写）")
+        self.fee_amount_chinese.setStyleSheet("QLabel { font-size: 16pt; color: gray; }")
         amount_layout.addWidget(amount_label)
         amount_layout.addWidget(self.input_amount)
+        amount_layout.addWidget(self.fee_amount_chinese)
         
-        # 将两个部分添加到水平布局中
         h_layout.addLayout(type_layout)
-        h_layout.addSpacing(20)  # 添加一些间距
+        h_layout.addSpacing(20)
         h_layout.addLayout(amount_layout)
+        h_layout.addStretch()
         
-        # 将水平布局添加到主布局
         v.addLayout(h_layout)
+        v.addSpacing(20)
         
-        # 添加一些垂直间距
+        # 计算按钮
+        btn = QPushButton("计算")
+        btn.setFixedWidth(700)
+        btn.setMinimumHeight(40)
+        btn.setStyleSheet("QPushButton { font-size: 18pt; }")
+        btn.clicked.connect(self.calc_fees)
+        v.addWidget(btn, alignment=Qt.AlignCenter)
         v.addSpacing(20)
         
         # 创建居中显示的容器
         center_container = QWidget()
         center_layout = QVBoxLayout(center_container)
-        
-        # 计算按钮居中且宽度与窗口一致
-        btn = QPushButton("计算")
-        btn.setFixedWidth(700)  # 设置固定宽度，略小于窗口宽度(560)留出边距
-        btn.setMinimumHeight(40)  # 可选：设置按钮高度
-        btn.clicked.connect(self.calc_fees)
-        center_layout.addWidget(btn)
         
         # 结果显示标签居中
         self.lbl_accept = QLabel("受理费：0 元")
@@ -105,20 +115,23 @@ class FeeCalculator(QWidget):
         for lbl in [self.lbl_accept, self.lbl_accept_half, 
                     self.lbl_preservation, self.lbl_execution]:
             lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("QLabel { font-size: 16pt; }")  # 设置字体大小
+            lbl.setStyleSheet("QLabel { font-size: 20pt; }")  # 设置字体大小
             center_layout.addWidget(lbl)
         
         v.addWidget(center_container)
-        v.addStretch(1)  # 底部添加弹性空间
+        v.addStretch(1)
         return w
 
     def calc_fees(self):
         try:
             amount = float(self.input_amount.text())
             is_empty = False
+            # 更新中文大写显示到诉讼费标签
+            self.fee_amount_chinese.setText(f"（{convert_to_chinese_number(amount)}）")
         except ValueError:
             amount = 0
             is_empty = True
+            self.fee_amount_chinese.setText("（输入有误）")
 
         # 获取选中的案件类型并计算对应的受理费
         case_type = self.combo_case_type.currentText()
@@ -141,97 +154,48 @@ class FeeCalculator(QWidget):
         w = QWidget()
         layout = QVBoxLayout(w)
         
-        # 第一排：公告日期选择（居中显示）
-        notice_date_layout = QHBoxLayout()
-        notice_date_layout.addStretch(1)
-        notice_date_label = QLabel("起始日（从第二日起计）：")
-        # 设置第一行字体大小
-        notice_date_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        
+        # 第一行：合并起始日和间隔天数
+        input_layout = QHBoxLayout()
+        input_layout.addStretch(1)
+        notice_date_label = QLabel("起始日：")
+        notice_date_label.setStyleSheet("QLabel { font-size: 18pt; }")
         self.notice_date = QDateEdit()
         self.notice_date.setLocale(QLocale(QLocale.Chinese))
         self.notice_date.setDate(QDate.currentDate())
         self.notice_date.setCalendarPopup(True)
         self.notice_date.setDisplayFormat("yyyy年M月d日")
-        # 设置日期选择器字体大小
-        self.notice_date.setStyleSheet("QDateEdit { font-size: 14pt; }")
-        
-        notice_date_layout.addWidget(notice_date_label)
-        notice_date_layout.addWidget(self.notice_date)
-        notice_date_layout.addStretch(1)
-        layout.addLayout(notice_date_layout)
-        
-        # 第二排：各期限输入（修改为居中显示）
-        periods_layout = QHBoxLayout()
-        periods_layout.addStretch(1)  # 左侧添加弹性空间
-    
-        # 公告期
-        notice_period_layout = QHBoxLayout()
-        notice_period_label = QLabel("公告期：")
-        notice_period_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        self.notice_period = QLineEdit()  # 改用 QLineEdit
-        self.notice_period.setStyleSheet("QLineEdit { font-size: 14pt; }")
-        self.notice_period.setText("30")   # 设置默认值
-        self.notice_period.setMaximumWidth(60)  # 限制输入框宽度
-        notice_period_layout.addWidget(notice_period_label)
-        notice_period_layout.addWidget(self.notice_period)
-        
-        # 添加间距
-        periods_layout.addLayout(notice_period_layout)
-        periods_layout.addSpacing(20)  # 控件之间的间距
-    
-        # 答辩期
-        reply_period_layout = QHBoxLayout()
-        reply_period_label = QLabel("答辩期：")
-        reply_period_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        self.reply_period = QLineEdit()  # 改用 QLineEdit
-        self.reply_period.setStyleSheet("QLineEdit { font-size: 14pt; }")
-        self.reply_period.setText("15")   # 设置默认值
-        self.reply_period.setMaximumWidth(60)  # 限制输入框宽度
-        reply_period_layout.addWidget(reply_period_label)
-        reply_period_layout.addWidget(self.reply_period)
-        
-        # 添加间距
-        periods_layout.addLayout(reply_period_layout)
-        periods_layout.addSpacing(20)  # 控件之间的间距
-    
-        # 开庭日
-        court_day_layout = QHBoxLayout()
-        court_day_label = QLabel("开庭日第")
-        court_day_label.setStyleSheet("QLabel { font-size: 14pt; }")
-        self.court_day = QLineEdit()  # 改用 QLineEdit
-        self.court_day.setStyleSheet("QLineEdit { font-size: 14pt; }")
-        self.court_day.setText("3")    # 设置默认值
-        self.court_day.setMaximumWidth(60)  # 限制输入框宽度
-        court_day_suffix = QLabel("日")
-        court_day_suffix.setStyleSheet("QLabel { font-size: 14pt; }")
-        court_day_layout.addWidget(court_day_label)
-        court_day_layout.addWidget(self.court_day)
-        court_day_layout.addWidget(court_day_suffix)
-        
-        periods_layout.addLayout(court_day_layout)
-        periods_layout.addStretch(1)  # 右侧添加弹性空间
-        layout.addLayout(periods_layout)
-        
-        # 第三排：日历显示
+        self.notice_date.setStyleSheet("QDateEdit { font-size: 18pt; }")
+        input_layout.addWidget(notice_date_label)
+        input_layout.addWidget(self.notice_date)
+        input_layout.addSpacing(20)
+        # 间隔总天数
+        days_label = QLabel("间隔总天数：")
+        days_label.setStyleSheet("QLabel { font-size: 18pt; }")
+        self.total_days = QLineEdit()
+        self.total_days.setStyleSheet("QLineEdit { font-size: 18pt; }")
+        self.total_days.setMaximumWidth(100)
+        self.total_days.setPlaceholderText("0")
+        input_layout.addWidget(days_label)
+        input_layout.addWidget(self.total_days)
+        input_layout.addStretch(1)
+        layout.addLayout(input_layout)
+        notice_hint = QLabel("（从第二日起计）")
+        notice_hint.setStyleSheet("QLabel { font-size: 16pt; color: gray; }")
+        notice_hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(notice_hint)
+        layout.addSpacing(5)
+        # 第二排：日历显示
         self.calendar = QCalendarWidget()
-        self.calendar.setFixedHeight(300)
-        # 禁用选择功能
+        self.calendar.setFixedHeight(310)
         self.calendar.setSelectionMode(QCalendarWidget.NoSelection)
-        
-        # 设置中文月份显示
         self.calendar.setLocale(QLocale(QLocale.Chinese))
-        
-        # 设置样式表
         self.calendar.setStyleSheet("""
             QCalendarWidget QTableView {
                 selection-background-color: transparent;
             }
-            /* 设置日期文字颜色为黑色 */
             QCalendarWidget QTableView QTableCornerButton::section {
                 color: black;
             }
-            /* 设置月份和年份显示的样式 */
             QCalendarWidget QToolButton {
                 color: black;
                 background-color: transparent;
@@ -241,113 +205,306 @@ class FeeCalculator(QWidget):
         layout.addWidget(self.calendar)
         
         # 第四排：结果显示
-        self.result_label = QLabel("开庭时间：请设置各项参数")
+        self.result_label = QLabel("开庭时间：请设置参数")
         self.result_label.setAlignment(Qt.AlignCenter)
-        self.result_label.setStyleSheet("QLabel { font-size: 16pt; }")  # 设置字体大小
+        self.result_label.setStyleSheet("QLabel { font-size: 16pt; }")
         layout.addWidget(self.result_label)
         
         # 连接信号
         self.notice_date.dateChanged.connect(self.update_calendar)
-        self.notice_period.textChanged.connect(self.update_calendar)
-        self.reply_period.textChanged.connect(self.update_calendar)
-        self.court_day.textChanged.connect(self.update_calendar)
+        self.total_days.textChanged.connect(self.update_calendar)
         
         return w
-    
+
     def update_calendar(self):
         """更新日历显示和结果"""
         try:
-            # 获取输入值并验证
-            notice_date = self.notice_date.date().toPython()
-            # 从第二天开始计算
-            notice_date = notice_date + timedelta(days=1)
+            # 获取起始日期
+            start_date = self.notice_date.date().toPython()
             
-            # 转换输入为整数，如果输入无效则使用默认值
+            # 获取总天数
             try:
-                # 获取输入值，允许0值
-                notice_days = int(self.notice_period.text() or "30")
-                reply_days = int(self.reply_period.text() or "15")
-                court_day = int(self.court_day.text() or "3")
-                
+                total_days = int(self.total_days.text() or "0")
+                if total_days < 0 or total_days > 365:
+                    return
             except ValueError:
-                return
-                
-            # 修改验证范围，允许0值
-            if not (0 <= notice_days <= 365 and 0 <= reply_days <= 365 and 0 <= court_day <= 365):
                 return
                 
             # 清除原有格式
             self.calendar.setDateTextFormat(QDate(), QTextCharFormat())
             
-            # 累加天数，0值不参与计算
-            current_date = notice_date
-            if notice_days > 0:
-                current_date += timedelta(days=notice_days)
-            if reply_days > 0:
-                current_date += timedelta(days=reply_days)
-            if court_day > 0:
-                current_date += timedelta(days=court_day)
-                
-            # 检查是否为周末并处理顺延
-            final_court_date = current_date
-            original_court_date = current_date
-            if calc.is_weekend(current_date):
-                final_court_date = calc.get_next_monday(current_date)
-                
+            # 计算开庭日期
+            original_date, final_date = calculate_court_date(start_date, total_days)
+            
             # 设置日期格式
             weekend_format = QTextCharFormat()
-            weekend_format.setBackground(QColor(255, 255, 0))  # 黄色背景 - 周末
+            weekend_format.setBackground(QColor(255, 255, 0))  # 黄色背景
             
             normal_format = QTextCharFormat()
-            normal_format.setBackground(QColor(50, 205, 50))  # 绿色背景 - 工作日
+            normal_format.setBackground(QColor(50, 205, 50))  # 绿色背景
             
             # 标记开庭日期
-            if calc.is_weekend(original_court_date):
-                # 如果原始开庭日是周末，用黄色标记
-                original_qdate = QDate.fromString(original_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+            if original_date != final_date:
+                # 周末和顺延日期都标记
+                original_qdate = QDate.fromString(original_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
                 self.calendar.setDateTextFormat(original_qdate, weekend_format)
                 
-                # 同时用绿色标记顺延后的周一
-                final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+                final_qdate = QDate.fromString(final_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
                 self.calendar.setDateTextFormat(final_qdate, normal_format)
             else:
-                # 如果是工作日，直接用绿色标记
-                final_qdate = QDate.fromString(final_court_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
+                # 工作日只标记一个日期
+                final_qdate = QDate.fromString(final_date.strftime("%Y-%m-%d"), "yyyy-MM-dd")
                 self.calendar.setDateTextFormat(final_qdate, normal_format)
             
-            # 自动将日历翻到开庭月份
+            # 自动翻到开庭月份
             self.calendar.setCurrentPage(final_qdate.year(), final_qdate.month())
             
             # 更新结果显示
-            if final_court_date != original_court_date:
+            if original_date != final_date:
                 self.result_label.setText(
-                    f"开庭时间：原定于{original_court_date.strftime('%Y年%m月%d日')}（周末），"
-                    f"顺延至{final_court_date.strftime('%Y年%m月%d日')}"
+                    f"开庭时间：原定于{original_date.strftime('%Y年%m月%d日')}（周末），"
+                    f"顺延至{final_date.strftime('%Y年%m月%d日')}"
                 )
             else:
                 self.result_label.setText(
-                    f"开庭时间：{final_court_date.strftime('%Y年%m月%d日')}"
+                    f"开庭时间：{final_date.strftime('%Y年%m月%d日')}"
                 )
-
+                
         except Exception as e:
             print(f"日期计算错误: {e}")
             return
 
     # -------------------------------
-    # Tab 3: 利息计算（预留）
+    # Tab 3: 利息计算
     # -------------------------------
     def _build_interest_tab(self) -> QWidget:
         w = QWidget()
-        v = QVBoxLayout(w)
-        lbl = QLabel("利息计算功能开发中…   免责条款请自行校验数据 算错概不负责")
-        lbl.setAlignment(Qt.AlignCenter)
-        v.addWidget(lbl)
-        w.setLayout(v)
+        layout = QVBoxLayout(w)
+        content_layout = QVBoxLayout()
+        
+        # 修改：基准天数选择行
+        type_layout = QHBoxLayout()
+        #type_layout.addSpacing(20)  # 左侧留白
+        
+        type_label = QLabel("自然年天数基准：")  # 修改为中文冒号
+        type_label.setStyleSheet("QLabel { font-size: 16pt; }")
+        type_layout.addWidget(type_label)
+        
+        type_layout.addSpacing(10)  # 标签后的间距
+        
+        self.calc_type_group = QButtonGroup(self)
+        self.days360_type = QRadioButton("360天")
+        self.days365_type = QRadioButton("365天")
+        self.days365_type.setChecked(True)
+        
+        for btn in [self.days360_type, self.days365_type]:
+            btn.setStyleSheet("QRadioButton { font-size: 16pt; }")
+            self.calc_type_group.addButton(btn)
+            type_layout.addWidget(btn)
+            if btn == self.days360_type:  # 在360天后添加间距
+                type_layout.addSpacing(40)  # 增加两个选项之间的间距
+    
+        type_layout.addStretch()  # 右侧弹性空间
+        content_layout.addLayout(type_layout)
+    
+    
+        # 第一行：案件金额
+        amount_layout = QHBoxLayout()
+        amount_label = QLabel("案件金额：")
+        amount_label.setStyleSheet("QLabel { font-size: 16pt; }")
+        self.interest_amount = QLineEdit()
+        self.interest_amount.setStyleSheet("QLineEdit { font-size: 16pt; }")
+        self.interest_amount_chinese = QLabel("（中文大写）")
+        self.interest_amount_chinese.setStyleSheet("QLabel { font-size: 16pt; color: gray; }")
+        amount_layout.addWidget(amount_label)
+        amount_layout.addWidget(self.interest_amount)
+        amount_layout.addWidget(self.interest_amount_chinese)
+        amount_layout.addStretch()
+        content_layout.addLayout(amount_layout)        
+        # 第二行：利率选择
+        rate_layout = QHBoxLayout()
+        rate_label = QLabel("利率选择：")
+        rate_label.setStyleSheet("QLabel { font-size: 16pt; }")
+        self.rate_input = QLineEdit()
+        self.rate_input.setStyleSheet("QLineEdit { font-size: 16pt; }")
+        self.rate_input.setMaximumWidth(100)
+        
+        self.rate_group = QButtonGroup(self)
+        self.day_rate = QRadioButton("日利率")
+        self.month_rate = QRadioButton("月利率")
+        self.year_rate = QRadioButton("年利率")
+        self.year_rate.setChecked(True)
+        for btn in [self.day_rate, self.month_rate, self.year_rate]:
+            btn.setStyleSheet("QRadioButton { font-size: 16pt; }")
+            self.rate_group.addButton(btn)
+        
+        rate_layout.addWidget(rate_label)
+        rate_layout.addWidget(self.rate_input)
+        rate_layout.addWidget(QLabel("%"))
+        rate_layout.addWidget(self.day_rate)
+        rate_layout.addWidget(self.month_rate)
+        rate_layout.addWidget(self.year_rate)
+        rate_layout.addStretch()
+        content_layout.addLayout(rate_layout)
+        # 第三行：起算日和截止日
+        date_layout = QHBoxLayout()
+        # 起算日
+        start_label = QLabel("起算日：")
+        start_label.setStyleSheet("QLabel { font-size: 16pt; }")
+        self.start_date = QDateEdit()
+        self.start_date.setStyleSheet("QDateEdit { font-size: 16pt; }")
+        self.start_date.setCalendarPopup(True)
+        self.start_date.setDate(QDate.currentDate())
+        # 截止日
+        end_label = QLabel("截止日：")
+        end_label.setStyleSheet("QLabel { font-size: 16pt; }")
+        self.end_date = QDateEdit()
+        self.end_date.setStyleSheet("QDateEdit { font-size: 16pt; }")
+        self.end_date.setCalendarPopup(True)
+        self.end_date.setDate(QDate.currentDate())
+        # 间隔显示
+        self.interval_label = QLabel("间隔：0年0月0天")
+        self.interval_label.setStyleSheet("QLabel { font-size: 16pt; }")        
+        date_layout.addWidget(start_label)
+        date_layout.addWidget(self.start_date)
+        date_layout.addWidget(end_label)
+        date_layout.addWidget(self.end_date)
+        date_layout.addWidget(self.interval_label)
+        date_layout.addStretch()
+        content_layout.addLayout(date_layout)
+        content_layout.addSpacing(20)
+        # 分隔线
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.HLine)
+        line2.setFrameShadow(QFrame.Sunken)
+        content_layout.addWidget(line2)
+        
+        # 修改结果显示区
+        self.result_amount = QLabel("金额：0.00 元")
+        self.result_period = QLabel("逾期：0年0月0天")
+        self.result_rate = QLabel("约定利率：0.0%")
+        self.result_interest = QLabel("计算结果：0.00 元")
+        self.result_total = QLabel("总计：0.00 元")
+        self.result_chinese = QLabel("（零元整）")
+        
+        for lbl in [self.result_amount, self.result_period, self.result_rate,
+                   self.result_interest, self.result_total, self.result_chinese]:
+            lbl.setStyleSheet("QLabel { font-size: 20pt; }")
+            lbl.setAlignment(Qt.AlignCenter)
+            content_layout.addWidget(lbl)
+        
+        layout.addLayout(content_layout)
+        
+        
+        # 绑定信号
+        self.interest_amount.textChanged.connect(self.update_amount)
+        self.rate_input.textChanged.connect(self.calculate_result)
+        self.start_date.dateChanged.connect(self.calculate_result)
+        self.end_date.dateChanged.connect(self.calculate_result)
+        self.days360_type.toggled.connect(self.calculate_result)
+        self.days365_type.toggled.connect(self.calculate_result)
+        for btn in [self.day_rate, self.month_rate, self.year_rate]:
+            btn.toggled.connect(self.calculate_result)
+    
+        # 修改日期选择器的区域设置
+        self.start_date.setLocale(QLocale(QLocale.Chinese))
+        self.start_date.setDisplayFormat("yyyy年M月d日")
+        self.end_date.setLocale(QLocale(QLocale.Chinese))
+        self.end_date.setDisplayFormat("yyyy年M月d日")
+    
         return w
+    
+    def update_amount(self):
+        """更新金额的中文显示"""
+        try:
+            amount = float(self.interest_amount.text() or "0")
+            self.interest_amount_chinese.setText(f"（{convert_to_chinese_number(amount)}）")
+            self.calculate_result()
+        except ValueError:
+            self.interest_amount_chinese.setText("（输入有误）")
+    
+    def calculate_result(self):
+        """计算利息/违约金结果"""
+        try:
+            # 获取输入值
+            amount = float(self.interest_amount.text() or "0")
+            rate = float(self.rate_input.text() or "0")
+            start_date = self.start_date.date().toPython()
+            end_date = self.end_date.date().toPython()
+            
+            # 获取利率类型和基准天数
+            rate_type = "year"
+            if self.day_rate.isChecked():
+                rate_type = "day"
+            elif self.month_rate.isChecked():
+                rate_type = "month"
+                
+            days_base = 365 if self.days365_type.isChecked() else 360
+            
+            # 计算时间间隔
+            years, months, days = calculate_days_between(start_date, end_date)
+            self.interval_label.setText(f"间隔：{years}年{months}月{days}天")
+            
+            # 计算利息/违约金
+            interest = calculate_interest(amount, rate, rate_type, start_date, end_date, days_base)
+            total = amount + interest
+        
+            # 更新显示
+            self.result_amount.setText(f"金额：{amount:,.2f} 元")
+            self.result_period.setText(f"逾期：{years}年{months}月{days}天")
+            self.result_rate.setText(f"约定利率：{rate}%")
+            self.result_interest.setText(f"计算结果：{interest:,.2f} 元")
+            self.result_total.setText(f"总计：{total:,.2f} 元")
+            self.result_chinese.setText(f"（{convert_to_chinese_number(total)}）")
+            
+        except ValueError:
+            self.result_interest.setText("计算结果：输入有误")
+            self.result_total.setText("总计：0 元")
+            self.result_chinese.setText("")
+    
+    # -------------------------------
+    # Tab 4: 预留模块
+    # -------------------------------
+    def _build_reserve_tab(self) -> QWidget:
+        """构建预留模块标签页"""
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        
+        # 添加顶部弹性空间
+        layout.addStretch(1)
+        
+        # 标题
+        title_label = QLabel("免责条款")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("QLabel { font-size: 24pt; font-weight: bold; margin-bottom: 20px; }")
+        layout.addWidget(title_label)
+        
+        # 添加标题后的间距
+        layout.addSpacing(20)
+        
+        # 免责内容
+        content_text = """本软件为本人工作之余开发，难免会有BUG与疏漏。
 
+        请自行校验数据，算错概不负责。
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    win = FeeCalculator()
-    win.show()
-    sys.exit(app.exec())
+        问题建议请提交Issue及时反馈
+
+        感谢您的支持与配合"""
+        
+        content_label = QLabel(content_text)
+        content_label.setAlignment(Qt.AlignCenter)
+        content_label.setStyleSheet("""
+            QLabel { 
+                font-size: 16pt; 
+                line-height: 1.5;
+                color: #333333;
+                margin: 10px;
+            }
+        """)
+        content_label.setWordWrap(True)
+        layout.addWidget(content_label)
+        
+        # 添加底部弹性空间
+        layout.addStretch(2)
+        
+        return w
